@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"os"
 	"sync"
 
@@ -57,36 +58,31 @@ func (handler *ImageHandler) OpenImage(path string) (image.Image, error) {
 	return img, err
 }
 
-func (handler *ImageHandler) GrayScaleImage(imgBuffer *Tensor) {
+func (handler *ImageHandler) GrayScaleImage(imgBuffer *Tensor, wg *sync.WaitGroup, mu *sync.Mutex) {
+	mu.Lock()
 	bufferSize := BufferSize{
 		X: len(*imgBuffer),
 		Y: len((*imgBuffer)[0]),
 	}
 
-	wg := sync.WaitGroup{}
-
 	for x := 0; x < bufferSize.X; x++ {
 		for y := 0; y < bufferSize.Y; y++ {
-			wg.Add(1)
-			go func(x, y int) {
-				originalColor, ok := color.RGBAModel.Convert((*imgBuffer)[x][y]).(color.RGBA)
+			originalColor, ok := color.RGBAModel.Convert((*imgBuffer)[x][y]).(color.RGBA)
 
-				if !ok {
-					fmt.Println("Color conversion failed.")
-				}
+			if !ok {
+				fmt.Println("Color conversion failed.")
+			}
 
-				grey := uint8(float64(originalColor.G)*0.72 + float64(originalColor.B)*0.07 + float64(originalColor.R)*0.21)
-
-				(*imgBuffer)[x][y] = color.RGBA{grey, grey, grey, originalColor.A}
-
-				wg.Done()
-			}(x, y)
+			grey := uint8(float64(originalColor.G)*0.72 + float64(originalColor.B)*0.07 + float64(originalColor.R)*0.21)
+			(*imgBuffer)[x][y] = color.RGBA{grey, grey, grey, originalColor.A}
 		}
 	}
-	wg.Wait()
+	mu.Unlock()
+	wg.Done()
 }
 
-func (handler *ImageHandler) RotateImage(imgBuffer *Tensor) {
+func (handler *ImageHandler) RotateImage(imgBuffer *Tensor, wg *sync.WaitGroup, mu *sync.Mutex) {
+	mu.Lock()
 	bufferSize := BufferSize{
 		X: len(*imgBuffer),
 		Y: len((*imgBuffer)[0]),
@@ -97,33 +93,38 @@ func (handler *ImageHandler) RotateImage(imgBuffer *Tensor) {
 			(*imgBuffer)[x][y], (*imgBuffer)[bufferSize.X-x-1][bufferSize.Y-y-1] = (*imgBuffer)[bufferSize.X-x-1][bufferSize.Y-y-1], (*imgBuffer)[x][y]
 		}
 	}
+	mu.Unlock()
+	wg.Done()
 }
 
-func (handler *ImageHandler) BlurImage(imgBuffer *Tensor, kernel *mat.Dense) {
+func (handler *ImageHandler) BlurImage(imgBuffer *Tensor, kernel *mat.Dense, wg *sync.WaitGroup, mu *sync.Mutex) {
 	rows, cols := kernel.Dims()
-	offset := float64(rows / 2)
-	kernelLength := float64(cols)
+	offset := rows / 2
+	kernelLength := cols
 
-	for x := offset; x < float64(len(*imgBuffer))-offset; x++ {
-		for y := offset; y < float64(len((*imgBuffer)[0])); y++ {
+	mu.Lock()
+	for x := 0; x < len(*imgBuffer); x++ {
+		for y := 0; y < len((*imgBuffer)[0]); y++ {
 			newPixel := color.RGBA{}
 
-			for a := 0.0; a < kernelLength-1; a++ {
-				for b := 0.0; b < kernelLength-1; b++ {
-					xn := x + a - offset
-					yn := y + a - offset
+			for a := 0; a < kernelLength; a++ {
+				for b := 0; b < kernelLength; b++ {
+					xn := math.Max(math.Min(float64(x+a-offset), float64(len(*imgBuffer)-1)), 0)
+					yn := math.Max(math.Min(float64(y+b-offset), float64(len((*imgBuffer)[0])-1)), 0)
 
 					r, g, bb, aa := (*imgBuffer)[int(xn)][int(yn)].RGBA()
 
-					newPixel.R += uint8(float64(uint8(r)) * kernel.At(int(a), int(b)))
-					newPixel.G += uint8(float64(uint8(g)) * kernel.At(int(a), int(b)))
-					newPixel.B += uint8(float64(uint8(bb)) * kernel.At(int(a), int(b)))
-					newPixel.A += uint8(float64(uint8(aa)) * kernel.At(int(a), int(b)))
+					newPixel.R += uint8(float64(uint8(r)) * kernel.At(a, b))
+					newPixel.G += uint8(float64(uint8(g)) * kernel.At(a, b))
+					newPixel.B += uint8(float64(uint8(bb)) * kernel.At(a, b))
+					newPixel.A += uint8(float64(uint8(aa)) * kernel.At(a, b))
 				}
 			}
-			(*imgBuffer)[int(x)][int(y)] = newPixel
+			(*imgBuffer)[x][y] = newPixel
 		}
 	}
+	mu.Unlock()
+	wg.Done()
 }
 
 func (handler *ImageHandler) DecodeTensor(pixels [][]color.Color) image.Image {

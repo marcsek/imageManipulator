@@ -7,8 +7,11 @@ import (
 	"image/png"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/marcsek/imageManipulator/misc"
 	"gonum.org/v1/gonum/mat"
 )
 
@@ -81,20 +84,31 @@ func (s *ApiServer) processImage(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("image could not be processed %s", "daco")
 	}
 
+	timerStart := time.Now()
+
+	wg := sync.WaitGroup{}
+	mu := sync.Mutex{}
+
 	imageBuffer := s.imageHandler.CreateTensor(image)
 	if rotate == "TRUE" {
-		s.imageHandler.RotateImage(&imageBuffer)
+		wg.Add(1)
+		go s.imageHandler.RotateImage(&imageBuffer, &wg, &mu)
 	}
 	if graysale == "TRUE" {
-		s.imageHandler.GrayScaleImage(&imageBuffer)
+		wg.Add(1)
+		go s.imageHandler.GrayScaleImage(&imageBuffer, &wg, &mu)
 	}
 	if blur == "TRUE" {
-		s.imageHandler.BlurImage(&imageBuffer, mat.NewDense(3, 3, []float64{
-			1.0 / 9, 1.0 / 9, 1.0 / 9,
-			1.0 / 9, 1.0 / 9, 1.0 / 9,
-			1.0 / 9, 1.0 / 9, 1.0 / 9,
-		}))
+		wg.Add(1)
+
+		intesity := 23
+		gausianDistribution := misc.GenerageGausianDistribution(intesity, 3)
+
+		go s.imageHandler.BlurImage(&imageBuffer, mat.NewDense(intesity, intesity, gausianDistribution), &wg, &mu)
 	}
+
+	wg.Wait()
+	fmt.Println(time.Since(timerStart))
 
 	newImage := s.imageHandler.DecodeTensor(imageBuffer)
 
